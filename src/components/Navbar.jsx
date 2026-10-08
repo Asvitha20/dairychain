@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { Droplet, ShieldCheck, Globe, Menu, X, Activity, LogOut, Users } from 'lucide-react';
+import { Droplet, ShieldCheck, Globe, Menu, X, Activity, LogOut, Users, Wallet } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useWallet } from '../hooks/useWallet';
 import { ROLES, ROUTE_ACCESS } from '../config/roleAccess';
 
 const NAV_LINKS = [
@@ -21,11 +22,11 @@ export default function Navbar() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { user, isAuthenticated, logout } = useAuth();
+  const { address, isConnecting, error: walletError, connectWallet } = useWallet();
   const onLanding = pathname === '/';
   const navText = onLanding ? 'text-white/80 hover:text-white hover:bg-white/10' : 'text-slate-500 hover:text-[#164d33] hover:bg-[#f3f8f4]';
   const activeNav = onLanding ? 'text-white bg-white/15' : 'text-[#164d33] bg-[#eaf6ed]';
 
-  // Filter nav links based on authenticated user's role using ROUTE_ACCESS
   const userRole = user?.role;
   const visibleLinks = NAV_LINKS.filter((link) => {
     if (link.adminOnly && userRole !== 'admin') return false;
@@ -35,7 +36,6 @@ export default function Navbar() {
     return allowed.includes(userRole) || userRole === 'admin';
   });
 
-  // Current role metadata
   const roleMeta = userRole ? ROLES[userRole] : null;
 
   const handleLogout = () => {
@@ -43,6 +43,10 @@ export default function Navbar() {
     setMobileOpen(false);
     navigate('/login');
   };
+
+  const shortAddress = address
+    ? `${address.slice(0, 6)}...${address.slice(-4)}`
+    : null;
 
   return (
     <header className={`fixed top-0 inset-x-0 z-50 h-[72px] transition-all duration-300 ${onLanding ? 'border-b border-white/15 bg-[#123b2a]/10' : 'glass-nav border-b border-emerald-900/10 shadow-[0_4px_24px_rgba(27,67,48,.05)]'}`}>
@@ -56,12 +60,22 @@ export default function Navbar() {
 
         <div className="hidden md:flex items-center gap-3">
           <span className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-[10px] font-bold uppercase tracking-wider ${onLanding ? 'bg-white/10 border-white/25 text-white/85' : 'bg-[#eff9f1] border-[#cbe8d1] text-[#267447]'}`}><Activity className="w-3 h-3" /> Network live</span>
-          <span className={`font-mono text-[11px] ${onLanding ? 'text-white/65' : 'text-slate-500'}`}>0x4F8b...91A</span>
+
+          <button
+            type="button"
+            onClick={connectWallet}
+            disabled={isConnecting}
+            title={walletError || 'Connect MetaMask wallet'}
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[10px] font-bold transition-colors disabled:cursor-wait disabled:opacity-70 ${onLanding ? 'border-white/25 bg-white/10 text-white hover:bg-white/20' : 'border-[#cbe8d1] bg-[#eff9f1] text-[#267447] hover:bg-[#e5f5e9]'}`}
+          >
+            <Wallet className="h-3 w-3" />
+            {isConnecting ? 'Connecting...' : address ? shortAddress : 'Connect Wallet'}
+          </button>
+
           <button type="button" aria-label="Network settings" className={`p-2 rounded-lg ${onLanding ? 'text-white/70 hover:text-white hover:bg-white/10' : 'text-slate-400 hover:text-[#164d33] hover:bg-[#eff9f1]'}`}><Globe className="w-4 h-4" /></button>
-          {/* Authenticated user area */}
+
           {isAuthenticated && roleMeta && (
             <div className="flex items-center gap-2.5">
-              {/* Role-colored pill */}
               <span className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-[10px] font-bold tracking-wider ${
                 onLanding
                   ? 'bg-white/10 border-white/25 text-white/85'
@@ -74,7 +88,6 @@ export default function Navbar() {
                 {roleMeta.icon} {roleMeta.label}
               </span>
 
-              {/* User name + email (md+ only) */}
               <div className="hidden lg:flex flex-col items-end leading-none">
                 <span className={`text-[12px] font-semibold ${onLanding ? 'text-white' : 'text-ink-primary'}`}>
                   {user?.name}
@@ -84,7 +97,6 @@ export default function Navbar() {
                 </span>
               </div>
 
-              {/* Avatar circle — navy bg, white initials */}
               <span className={`w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 ${
                 onLanding
                   ? 'bg-white/15 border border-white/30 text-white'
@@ -93,7 +105,6 @@ export default function Navbar() {
                 {user?.initials || 'DC'}
               </span>
 
-              {/* Sign out */}
               <button
                 type="button"
                 onClick={handleLogout}
@@ -120,4 +131,3 @@ export default function Navbar() {
     </header>
   );
 }
-
