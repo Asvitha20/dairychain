@@ -1,95 +1,189 @@
 import { useCallback } from "react";
-import {
-  recentBatches,
-  ledgerEntries,
-  milk001TemperatureLog,
-  batchJourney,
-} from "../data/mockData.js";
+import { BrowserProvider, Contract } from "ethers";
+import { CONTRACT_ADDRESS } from "../contracts/contractAddress.js";
+import ABI from "../contracts/DairyChainABI.json";
 
-/**
- * Contract interaction hook. Currently returns mock data so the UI is fully
- * functional without a deployed DairyChain contract. Swap the bodies of
- * these functions for real ethers.Contract calls once CONTRACT_ADDRESS
- * points at a deployed instance (see src/contracts/contractAddress.js and
- * src/contracts/DairyChainABI.json).
- *
- * @returns {{
- *   getBatch: (batchId: string) => Promise<object>,
- *   getTemperatureLogs: (batchId: string) => Promise<object[]>,
- *   getViolations: () => Promise<object[]>,
- *   getRecentBlocks: () => Promise<object[]>,
- *   createBatch: (input: object) => Promise<{txHash: string}>,
- *   logTemperature: (batchId: string, celsius: number) => Promise<{txHash: string}>,
- *   verifyBatch: (batchId: string) => Promise<{verified: boolean}>,
- * }}
- */
+function getContract() {
+  if (!window.ethereum) {
+    throw new Error("MetaMask is not installed.");
+  }
+
+  const provider = new BrowserProvider(window.ethereum);
+
+  return provider.getSigner().then((signer) => {
+    return new Contract(CONTRACT_ADDRESS, ABI, signer);
+  });
+}
+
 export function useContract() {
-  // ---- Reads ----------------------------------------------------------
 
+  // ---------------------------------------------------------
+  // GET BATCH
+  // ---------------------------------------------------------
   const getBatch = useCallback(async (batchId) => {
-    await simulateLatency();
-    const summary = recentBatches.find((b) => b.id === batchId);
-    if (batchId === batchJourney.id || !summary) {
-      return batchJourney;
-    }
-    return summary;
+    const contract = await getContract();
+
+    const result = await contract.getBatch(batchId);
+
+    return {
+      batchId: result[0],
+      containerId: result[1],
+      originCooperative: result[2],
+      volumeLiters: Number(result[3]),
+      createdAt: Number(result[4]),
+      exists: result[5],
+    };
   }, []);
 
-  const getTemperatureLogs = useCallback(async (batchId) => {
-    await simulateLatency();
-    // All batches share the MILK001 mock series for now.
-    return milk001TemperatureLog;
+  // ---------------------------------------------------------
+  // CHECK WHETHER BATCH EXISTS
+  // ---------------------------------------------------------
+  const batchExists = useCallback(async (batchId) => {
+    const contract = await getContract();
+
+    return await contract.batchExists(batchId);
   }, []);
 
-  const getViolations = useCallback(async () => {
-    await simulateLatency();
-    return ledgerEntries.filter((entry) => entry.tempStatus === "critical");
-  }, []);
-
-  const getRecentBlocks = useCallback(async () => {
-    await simulateLatency();
-    return ledgerEntries;
-  }, []);
-
-  // ---- Writes -----------------------------------------------------------
-
+  // ---------------------------------------------------------
+  // CREATE BATCH
+  // ---------------------------------------------------------
   const createBatch = useCallback(async (input) => {
-    await simulateLatency();
-    return { txHash: mockTxHash() };
+    const contract = await getContract();
+
+    const batchId = input.batchId;
+    const containerId = input.containerId;
+    const originCooperative =
+      input.originCooperative || input.cooperative || "";
+    const volumeLiters = Number(input.volumeLiters || 0);
+
+    const tx = await contract.createBatch(
+      batchId,
+      containerId,
+      originCooperative,
+      volumeLiters
+    );
+
+    const receipt = await tx.wait();
+
+    return {
+      txHash: receipt.hash,
+    };
   }, []);
 
-  const logTemperature = useCallback(async (batchId, celsius) => {
-    await simulateLatency();
-    return { txHash: mockTxHash() };
+  // ---------------------------------------------------------
+  // COMMIT TELEMETRY
+  // ---------------------------------------------------------
+  const commitTelemetry = useCallback(
+    async (batchId, merkleRoot, readingCount) => {
+      const contract = await getContract();
+
+      const tx = await contract.commitTelemetry(
+        batchId,
+        merkleRoot,
+        Number(readingCount)
+      );
+
+      const receipt = await tx.wait();
+
+      return {
+        txHash: receipt.hash,
+      };
+    },
+    []
+  );
+
+  // ---------------------------------------------------------
+  // RECORD CRITICAL TEMPERATURE VIOLATION
+  // ---------------------------------------------------------
+  const recordViolation = useCallback(
+    async (batchId, temperature, reason) => {
+      const contract = await getContract();
+
+      const tx = await contract.recordViolation(
+        batchId,
+        Math.round(Number(temperature)),
+        reason
+      );
+
+      const receipt = await tx.wait();
+
+      return {
+        txHash: receipt.hash,
+      };
+    },
+    []
+  );
+
+  // ---------------------------------------------------------
+  // GET TELEMETRY COMMITMENTS
+  // ---------------------------------------------------------
+  const getTelemetryCommitments = useCallback(
+    async (batchId) => {
+      const contract = await getContract();
+
+      const count = Number(
+        await contract.getCommitmentCount(batchId)
+      );
+
+      const commitments = [];
+
+      for (let i = 0; i < count; i++) {
+        const result = await contract.getTelemetryCommitment(
+          batchId,
+          i
+        );
+
+        commitments.push({
+          merkleRoot: result[0],
+          timestamp: Number(result[1]),
+          readingCount: Number(result[2]),
+        });
+      }
+
+      return commitments;
+    },
+    []
+  );
+
+  // ---------------------------------------------------------
+  // GET VIOLATIONS
+  // ---------------------------------------------------------
+  const getViolations = useCallback(async () => {
+    const contract = await getContract();
+
+    const count = Number(
+      await contract.getViolationCount()
+    );
+
+    const violations = [];
+
+    for (let i = 0; i < count; i++) {
+      const result = await contract.getViolation(i);
+
+      violations.push({
+        batchId: result[0],
+        containerId: result[1],
+        temperature: Number(result[2]),
+        timestamp: Number(result[3]),
+        reason: result[4],
+      });
+    }
+
+    return violations;
   }, []);
 
-  const verifyBatch = useCallback(async (batchId) => {
-    await simulateLatency();
-    return { verified: true };
-  }, []);
-
+  // ---------------------------------------------------------
+  // RETURN
+  // ---------------------------------------------------------
   return {
     getBatch,
-    getTemperatureLogs,
-    getViolations,
-    getRecentBlocks,
+    batchExists,
     createBatch,
-    logTemperature,
-    verifyBatch,
+    commitTelemetry,
+    recordViolation,
+    getTelemetryCommitments,
+    getViolations,
   };
-}
-
-function simulateLatency(ms = 300) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function mockTxHash() {
-  const chars = "0123456789abcdef";
-  let hash = "0x";
-  for (let i = 0; i < 40; i++) {
-    hash += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return hash;
 }
 
 export default useContract;
