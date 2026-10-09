@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useContract } from "../hooks/useContract.js";
 import { Search, X } from "lucide-react";
 import StatusBadge from "../components/StatusBadge.jsx";
 import { custodyTimeline } from "../data/mockData.js";
@@ -7,6 +8,36 @@ const sampleQueries = ["MILK001", "TN-8800-401", "0X8F3C...9B2"];
 
 export default function Verify() {
   const [query, setQuery] = useState("");
+  const { batchExists } = useContract();
+const [result, setResult] = useState(null);
+const [checking, setChecking] = useState(false);
+
+const handleVerify = async () => {
+  if (!query.trim()) return;
+
+  setChecking(true);
+  setResult(null);
+
+  try {
+    const exists = await batchExists(query.trim());
+
+    setResult({
+      success: exists,
+      message: exists
+        ? `Batch ${query.trim()} exists on the Sepolia blockchain.`
+        : `Batch ${query.trim()} was not found on the blockchain.`,
+    });
+  } catch (error) {
+    console.error("Blockchain verification failed:", error);
+
+    setResult({
+      success: false,
+      message: error?.message || "Unable to connect to the blockchain.",
+    });
+  } finally {
+    setChecking(false);
+  }
+};
 
   return (
     <div className="mx-auto max-w-4xl px-4 md:px-8 py-12 space-y-10">
@@ -46,11 +77,13 @@ export default function Verify() {
             )}
           </div>
           <button
-            type="button"
-            className="px-6 py-3 rounded-lg bg-navy text-white text-sm font-medium hover:bg-navy/90 hover:scale-[1.02] transition-default"
-          >
-            Verify Batch
-          </button>
+  type="button"
+  onClick={handleVerify}
+  disabled={checking}
+  className="px-6 py-3 rounded-lg bg-navy text-white text-sm font-medium hover:bg-navy/90 hover:scale-[1.02] transition-default disabled:opacity-60"
+>
+  {checking ? "Checking..." : "Verify Batch"}
+</button>
         </div>
 
         <div className="mt-4 flex items-center gap-2 flex-wrap">
@@ -69,6 +102,18 @@ export default function Verify() {
           ))}
         </div>
       </div>
+
+      {result && (
+  <div
+    className={`mt-4 rounded-lg border p-4 text-sm ${
+      result.success
+        ? "border-green-200 bg-green-50 text-green-800"
+        : "border-red-200 bg-red-50 text-red-800"
+    }`}
+  >
+    {result.message}
+  </div>
+)}
 
 
       {/* Custody timeline */}
