@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Milk,
@@ -26,6 +27,7 @@ import LivePulse from "../components/LivePulse.jsx";
 import BlockchainSimulator from "../components/BlockchainSimulator.jsx";
 import DataTable from "../components/DataTable.jsx";
 import { useLiveTemperature } from "../hooks/useLiveTemperature";
+import { useContract } from "../hooks/useContract";
 import {
   recentBatches,
   sensorFeed,
@@ -44,6 +46,50 @@ const columns = [
 ];
 
 export default function Dashboard() {
+  const { createBatch } = useContract();
+  const [registerOpen, setRegisterOpen] = useState(false);
+  const [form, setForm] = useState({ batchId: "", containerId: "", originCooperative: "", volumeLiters: "" });
+  const [submitting, setSubmitting] = useState(false);
+  const [feedback, setFeedback] = useState(null);
+
+  const submitBatch = async (event) => {
+    event.preventDefault();
+    setFeedback(null);
+    const data = {
+      batchId: form.batchId.trim(),
+      containerId: form.containerId.trim(),
+      originCooperative: form.originCooperative.trim(),
+      volumeLiters: Number(form.volumeLiters),
+    };
+    if (!data.batchId || !data.containerId || !data.originCooperative || !Number.isSafeInteger(data.volumeLiters) || data.volumeLiters <= 0) {
+      setFeedback({ error: true, text: "Enter all fields and a positive whole-number volume." });
+      return;
+    }
+    if (!window.ethereum) {
+      setFeedback({ error: true, text: "MetaMask is unavailable. Enable the extension and retry." });
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await window.ethereum.request({ method: "eth_requestAccounts" });
+      const chainId = await window.ethereum.request({ method: "eth_chainId" });
+      if (Number.parseInt(chainId, 16) !== 11155111) {
+        setFeedback({ error: true, text: "Switch MetaMask to Sepolia and try again." });
+        return;
+      }
+      const result = await createBatch(data);
+      setFeedback({ text: "Batch " + data.batchId + " created on Sepolia. Transaction: " + result.txHash, txHash: result.txHash, batchId: data.batchId });
+      setForm({ batchId: "", containerId: "", originCooperative: "", volumeLiters: "" });
+    } catch (error) {
+      let errorText = error?.shortMessage || error?.reason || error?.message || "Transaction failed.";
+      if (error?.code === 4001 || error?.code === "ACTION_REJECTED") errorText = "Transaction rejected in MetaMask.";
+      else if (/onlyowner|ownable|not the owner/i.test(errorText)) errorText = "Wrong wallet. Connect the MetaMask account that deployed this contract.";
+      setFeedback({ error: true, text: errorText });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const {
     temperature,
     humidity,
@@ -92,6 +138,7 @@ export default function Dashboard() {
             </button>
             <button
               type="button"
+              onClick={() => { setFeedback(null); setRegisterOpen(true); }}
               className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-navy text-white text-sm font-medium hover:bg-navy/90 hover:scale-[1.02] transition-default"
             >
               <Plus className="w-4 h-4" />
@@ -418,6 +465,26 @@ export default function Dashboard() {
           />
         </div>
       </div>
+
+      {registerOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+          <section role="dialog" aria-modal="true" aria-labelledby="register-batch-title" className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+            <div className="mb-5 flex justify-between gap-4">
+              <div><p className="text-xs font-semibold uppercase tracking-widest text-emerald-700">Sepolia Smart Contract</p><h2 id="register-batch-title" className="mt-1 text-2xl font-semibold text-slate-900">Register New Milk Batch</h2><p className="mt-1 text-sm text-slate-500">Confirm the transaction in MetaMask to register this batch on-chain.</p></div>
+              <button type="button" disabled={submitting} onClick={() => setRegisterOpen(false)} aria-label="Close" className="rounded-lg px-3 py-1 text-xl text-slate-500">×</button>
+            </div>
+            <form onSubmit={submitBatch} className="space-y-4">
+              <div><label htmlFor="register-batch-id" className="mb-1 block text-sm font-medium text-slate-700">Batch ID</label><input id="register-batch-id" required maxLength={64} value={form.batchId} onChange={(e) => setForm({ ...form, batchId: e.target.value })} placeholder="MILK001" className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-slate-900" /></div>
+              <div><label htmlFor="register-container-id" className="mb-1 block text-sm font-medium text-slate-700">Container ID</label><input id="register-container-id" required maxLength={64} value={form.containerId} onChange={(e) => setForm({ ...form, containerId: e.target.value })} placeholder="CONT001" className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-slate-900" /></div>
+              <div><label htmlFor="register-origin" className="mb-1 block text-sm font-medium text-slate-700">Origin Cooperative</label><input id="register-origin" required maxLength={120} value={form.originCooperative} onChange={(e) => setForm({ ...form, originCooperative: e.target.value })} placeholder="Erode Dairy Cluster" className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-slate-900" /></div>
+              <div><label htmlFor="register-volume" className="mb-1 block text-sm font-medium text-slate-700">Milk Volume (litres)</label><input id="register-volume" type="number" min="1" step="1" required value={form.volumeLiters} onChange={(e) => setForm({ ...form, volumeLiters: e.target.value })} placeholder="100" className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-slate-900" /></div>
+              {feedback && <div role="status" className={"break-words rounded-lg border p-3 text-sm " + (feedback.error ? "border-rose-200 bg-rose-50 text-rose-800" : "border-emerald-200 bg-emerald-50 text-emerald-900")}><p>{feedback.text}</p>{feedback.txHash && <a className="mt-2 inline-block underline" href={"https://sepolia.etherscan.io/tx/" + feedback.txHash} target="_blank" rel="noreferrer">View transaction on Etherscan ↗</a>}{feedback.batchId && <p className="mt-2">Now open Verify and enter <strong>{feedback.batchId}</strong>.</p>}</div>}
+              <div className="flex justify-end gap-3 pt-2"><button type="button" disabled={submitting} onClick={() => setRegisterOpen(false)} className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm text-slate-700">Cancel</button><button type="submit" disabled={submitting} className="rounded-lg bg-navy px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60">{submitting ? "Waiting for blockchain..." : "Create Batch on Blockchain"}</button></div>
+              <p className="text-xs text-slate-500">Requires Sepolia ETH and the MetaMask account that deployed the contract.</p>
+            </form>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
