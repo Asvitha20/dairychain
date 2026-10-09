@@ -20,10 +20,73 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const mqtt = require('mqtt');
+const { ethers } = require('ethers');
 require('dotenv').config();
 const authRoutes = require('./routes/auth');
 const accessRequestRoutes = require('./routes/accessRequests');
 const userRoutes = require('./routes/users');
+
+// ─── Sepolia blockchain writer ───────────────────────────────────
+// Configure these in the LOCAL server/.env file. Never commit private keys.
+const SEPOLIA_RPC_URL = process.env.SEPOLIA_RPC_URL;
+const TEMPERATURE_LOG_CONTRACT_ADDRESS = process.env.TEMPERATURE_LOG_CONTRACT_ADDRESS;
+const BLOCKCHAIN_PRIVATE_KEY = process.env.BLOCKCHAIN_PRIVATE_KEY;
+const BLOCKCHAIN_BATCH_ID = process.env.BLOCKCHAIN_BATCH_ID || 'BATCH-001';
+const BLOCKCHAIN_MIN_INTERVAL_MS = 60_000; // At most one on-chain write per minute
+const temperatureLogAbi = [
+  'function recordTemperature(string deviceId, string batchId, int256 temperatureCentiC) external',
+  'function getReadingCount() external view returns (uint256)',
+];
+let temperatureLogContract = null;
+let lastBlockchainWriteAt = 0;
+let blockchainWriteInProgress = false;
+
+if (SEPOLIA_RPC_URL && TEMPERATURE_LOG_CONTRACT_ADDRESS && BLOCKCHAIN_PRIVATE_KEY) {
+  try {
+    const provider = new ethers.JsonRpcProvider(SEPOLIA_RPC_URL);
+    const wallet = new ethers.Wallet(BLOCKCHAIN_PRIVATE_KEY, provider);
+    temperatureLogContract = new ethers.Contract(
+      TEMPERATURE_LOG_CONTRACT_ADDRESS,
+      temperatureLogAbi,
+      wallet
+    );
+    console.log('⛓️ Sepolia temperature logging configured. Signer:', wallet.address);
+    console.log('   Contract:', TEMPERATURE_LOG_CONTRACT_ADDRESS);
+  } catch (err) {
+    console.error('❌ Blockchain configuration error:', err.message);
+  }
+} else {
+  console.warn('ℹ️ Sepolia logging is not configured. Add SEPOLIA_RPC_URL, TEMPERATURE_LOG_CONTRACT_ADDRESS, and BLOCKCHAIN_PRIVATE_KEY to server/.env.');
+}
+
+async function recordTemperatureOnChain(reading) {
+  if (!temperatureLogContract) return;
+  const now = Date.now();
+  if (blockchainWriteInProgress || now - lastBlockchainWriteAt < BLOCKCHAIN_MIN_INTERVAL_MS) return;
+
+  blockchainWriteInProgress = true;
+  lastBlockchainWriteAt = now;
+  try {
+    const temperatureCentiC = Math.round(Number(reading.temperature) * 100);
+    const tx = await temperatureLogContract.recordTemperature(
+      String(reading.deviceId || 'MILK-ESP32-01'),
+      BLOCKCHAIN_BATCH_ID,
+      temperatureCentiC
+    );
+    console.log('⛓️ Sepolia transaction submitted:', tx.hash);
+    const receipt = await tx.wait();
+    console.log('✅ Temperature recorded on Sepolia. Block:', receipt.blockNumber, '| Tx:', tx.hash);
+    reading.blockchainTxHash = tx.hash;
+    reading.blockchainStatus = 'confirmed';
+  } catch (err) {
+    // Keep live sensor monitoring working even if blockchain submission fails.
+    lastBlockchainWriteAt = 0; // Allow retry on a later reading
+    console.error('❌ Sepolia temperature write failed:', err.shortMessage || err.message);
+    if (reading) reading.blockchainStatus = 'failed';
+  } finally {
+    blockchainWriteInProgress = false;
+  }
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -119,7 +182,8 @@ app.post('/api/temperature', (req, res) => {
     readings.shift();
   }
 
-  // Broadcast to all connected WebSocket clients
+  // Save a throttled copy to Sepolia, then broadcast live to clients.
+  void recordTemperatureOnChain(reading);
   io.emit('new-temperature', reading);
 
   // Console log
@@ -274,7 +338,8 @@ mqttClient.on('message', (topic, message) => {
     readings.push(newReading);
     if (readings.length > 200) readings.shift();
 
-    // Broadcast to all React clients via Socket.io
+    // Save a throttled copy to Sepolia, then broadcast live to clients.
+    void recordTemperatureOnChain(newReading);
     io.emit('new-temperature', newReading);
 
     const extraInfo = [
